@@ -1,0 +1,27 @@
+{
+  "name": "intnt1_zms29",
+  "version": "1.0.0",
+  "description": "store api",
+  "main": "index.js",
+  "dependencies": {
+    "express": "^4.17.1",
+    "joi": "^17.2.1",
+    "uuid": "^8.3.0"
+  },
+  "scripts": {
+    "test": "node index.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zoeschmitt/Store.git"
+  },
+  "keywords": [
+    "store"
+  ],
+  "author": "Zoe Schmitt",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/zoeschmitt/Store/issues"
+  },
+  "homepage": "https://github.com/zoeschmitt/Store#readme"
+}

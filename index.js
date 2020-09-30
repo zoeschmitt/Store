@@ -1,15 +1,22 @@
+/*
+Store API by Zoe Schmitt (zms29)
+
+Note: 
+- As of now users only have one cart but have an array for the cartIds to allow for having multiple carts
+in the future. (maybe a wish list, so in that case will add a new endpoint /wishlist).
+*/
+
 const express = require('express');
 const Joi = require('joi');
 const { v4: uuidv4 } = require('uuid');
 
-// create new express app and save it as "app"
 const app = express();
 
-// server configuration
 const PORT = 8080;
 
-//dummy data
-
+//
+//  Dummy Data
+//
 const users = [
     {
         id: '2027228e-d39d-4e89-8b2e-0eb8010536a4',
@@ -49,12 +56,16 @@ const storeItems = [
     { id: 'f8747408-abc8-4fbc-968f-d09a3314feb1', name: 'Mooney M20' },
 ];
 
-//middleware
+//
+//  Middleware
+//
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
 
-// user api
+//
+//  User API
+//
 
 app.get('/user/:userId', (req, res) => {
     const user = users.find(u => u.id === req.params.userId);
@@ -111,7 +122,9 @@ app.post('/user', (req, res) => {
     res.status(200).json(users);
 });
 
-// cart api
+//
+//  Cart API
+//
 
 app.get('/user/:userId/cart', (req, res) => {
     const user = users.find(u => u.id === req.params.userId);
@@ -148,7 +161,9 @@ app.delete('/user/:userId/cart', (req, res) => {
 
 });
 
-// cart item api
+//
+//  Cart Item API
+//
 
 app.post('/user/:cartId/cartItem', (req, res) => {
     var cartIndex;
@@ -181,26 +196,56 @@ app.post('/user/:cartId/cartItem', (req, res) => {
     }
 
     cartIndex !== null ? res.status(200).json(carts[cartIndex]) : res.status(400).json({ msg: `Could not add item` });
-    
+
 });
 
 app.delete('/user/:cartId/cartItem/:cartItemId', (req, res) => {
-    //item id
-    //optional quantity, if none then deletes all
-    res.send('Hello World');
+    var found = false;
+
+    for (j = 0; j < carts.length; j++) {
+        if (carts[j].cartId === req.params.cartId) {
+            for (i = 0; i < carts[j].cartItems.length; i++) {
+                if (carts[j].cartItems[i].cartItemId === req.params.cartItemId) {
+                    found = true;
+                    carts[j].cartItems.splice(i, 1);
+                }
+            }
+        }
+    }
+
+    found ? res.status(200).json({ msg: `Success deleting item` }) : res.status(400).json({ msg: `Could not delete item` });
+
 });
 
-// store item api
+//
+//  Store Item API
+//
 
 app.get('/storeItem/:storeItemId', (req, res) => {
-    //item id
-    //item quanitty
-    res.send('Hello World');
+    const item = storeItems.find(i => i.id === req.params.storeItemId);
+
+    if (item) {
+        res.status(200).json(item);
+    } else {
+        res.status(400).json({ msg: `No matching item for id ${req.params.storeItemId}` });
+    }
 });
 
 app.get('/storeItem', (req, res) => {
-    //query
-    res.send('Hello World');
+    var response = [];
+
+    if (req.query !== null) {
+        for (i = 0; i < storeItems.length; i++) {
+            var regex = new RegExp(req.query.query, 'gi');
+            if (regex.test(storeItems[i].name)) {
+                response.push(storeItems[i]);
+            }
+        }
+    } else {
+        res.status(400).json({ msg: `Error with query` });
+    }
+
+    res.json(response);
 });
 
 // make the server listen to requests
