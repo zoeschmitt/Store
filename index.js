@@ -3,6 +3,9 @@ Store API by Zoe Schmitt (zms29)
 */
 
 const express = require('express');
+const jwt = require('jsonwebtoken');
+const accessTokenSecret = "someSecretIJustInvented!";
+var cors = require('cors');
 const Joi = require('joi');
 const url = 'mongodb+srv://dbUser:dbUserPassword@cluster0.uune5.mongodb.net/store_db?retryWrites=true&w=majority';
 const mongoose = require('mongoose');
@@ -10,7 +13,6 @@ const session = require('express-session')
 const MongoStore = require('connect-mongo')(session);
 const User = require('./models/User')
 const Cart = require('./models/Cart')
-const CartItem = require('./models/CartItem')
 const StoreItem = require('./models/StoreItem');
 const { boolean } = require('joi');
 const app = express();
@@ -27,7 +29,7 @@ var database;
 //
 //  Middleware
 //
-
+app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
 app.use(session({
@@ -41,27 +43,39 @@ app.use(session({
 //  User API
 //
 
-app.get('/user/:userId', async (req, res) => {
+app.post('/user/signin', async (req, res) => {
     var user;
-    try {
-        await User.findById(req.params.userId, function (err, foundUser) {
-            if (err) {
-                res.status(400).json({ msg: `Could not find user with id of ${req.params.userId}` });
-                return;
-            } else {
-                console.log(`found user: ${foundUser}`);
-                user = foundUser;
-            }
-        });
-    } catch (e) {
-        console.log(`error: ${e}`);
-        res.status(400).json({ msg: `Could not find user with the id of ${req.params.userId}  ${e}` });
+    //create a joi object to validate the body request
+    const schema = Joi.object({
+        email: Joi.string().email().required(),
+        password: Joi.string().min(2).required(),
+    });
+
+    //use new joi object to validate
+    const { error, value } = schema.validate({ email: req.body.email, password: req.body.password });
+
+    if (error) {
+        console.log(`eror: ${error}`);
+        res.status(400).send(error);
         return;
     }
 
-    user != null ? res.status(200).json(user) : res.status(400).json({ msg: `No user with the id of ${req.params.userId}` });
-});
+    try {
+        const {email, password} = req.body;
+        const user = await User.findOne({email, password}).populate('carts');
+        if (user) {
+            //User was found, create a token!
+            const accessToken = jwt.sign({user}, accessTokenSecret);
+            res.status(200).json({jwt: accessToken, userId: user._id, firstName: user.firstName, lastName: user.lastName, carts: user.carts});
+        } else {
+            res.sendStatus(403);
+        }
+    } catch(e){
+        return res.status(400).send(e)
+    }
+})
 
+//create a new user
 app.post('/user', async (req, res) => {
     var user;
     //create a joi object to validate the body request
@@ -69,10 +83,11 @@ app.post('/user', async (req, res) => {
         firstName: Joi.string().min(2).required(),
         lastName: Joi.string().min(2).required(),
         email: Joi.string().email().required(),
+        password: Joi.string().min(2).required()
     });
 
     //use new joi object to validate
-    const { error, value } = schema.validate({ firstName: req.body.firstName, lastName: req.body.lastName, email: req.body.email });
+    const { error, value } = schema.validate({ firstName: req.body.firstName, lastName: req.body.lastName, email: req.body.email, password: req.body.password });
 
     if (error) {
         console.log(`eror: ${error}`);
@@ -86,6 +101,7 @@ app.post('/user', async (req, res) => {
             firstName: req.body.firstName,
             lastName: req.body.lastName,
             email: req.body.email,
+            password: req.body.password,
             carts: []
         }
 
@@ -93,18 +109,61 @@ app.post('/user', async (req, res) => {
             _id: new mongoose.Types.ObjectId(),
             name: "main",
             user: newUser._id,
-            cartItems: []
+            items: []
         }
         newUser.carts.push(newCart._id);
         user = await User(newUser).save();
         console.log(`new user saved: ${newUser._id}`);
         await Cart(newCart).save();
         console.log(`new cart saved: ${newCart._id}`);
+        const accessToken = jwt.sign({user}, accessTokenSecret);
+        console.log(`jwt token created`);
+        res.status(200).json({jwt: accessToken, userId: user._id, firstName: user.firstName, lastName: user.lastName, carts: user.carts});
     } catch (e) {
         res.status(400).json({ msg: `Could not create user, ${e}` });
         return;
     }
-    user != null ? res.status(200).json(user) : res.status(400).json({ msg: `Could not create user` });
+});
+
+app.use(async (req, res, next) => {
+    try {
+        const authHeader = req.headers.authorization;
+        if (authHeader) {
+            //Bearer eyJhbGci...
+            const jwtToken = authHeader.split(' ')[1];
+            const user = jwt.verify(jwtToken, accessTokenSecret);
+            req.userJwt = user;
+        } else {
+            return res.send(401);
+        }
+    } catch (err) {
+        res.send(403);
+    }
+    next();
+})
+
+app.get('/user/:userId', async (req, res) => {
+    var user;
+    try {
+        await User.findById(req.params.userId, function (err, foundUser) {
+            if (err) {
+                res.status(400).json({ msg: `Could not find user with id of ${req.params.userId}` });
+                return;
+            } else {
+                console.log(`found user: ${foundUser}`);
+                user = foundUser;
+            }
+        });
+        if (req.userJwt.user._id !== user.id) {
+            return res.sendStatus(403);
+        }
+    } catch (e) {
+        console.log(`error: ${e}`);
+        res.status(400).json({ msg: `Could not find user with the id of ${req.params.userId}  ${e}` });
+        return;
+    }
+
+    user != null ? res.status(200).json(user) : res.status(400).json({ msg: `No user with the id of ${req.params.userId}` });
 });
 
 //
@@ -114,14 +173,17 @@ app.post('/user', async (req, res) => {
 app.get('/user/:userId/cart', async (req, res) => {
     var cart;
     try {
-        cart = await Cart.findOne({ user: req.params.userId });
-        console.log(`cart: ${cart}`);
+        cart = await Cart.findOne({ user: req.params.userId }).populate('cartItems.item');
+        //console.log(`cart: ${cart}`);
+        if (req.userJwt.user._id !== req.params.userId) {
+            return res.send(403);
+        }
+        res.status(200).json(cart)
     } catch (e) {
         console.log(`error: ${e}`);
         res.status(400).json({ msg: `Could not find cart with the userId of ${req.params.userId}  ${e}` });
         return;
     }
-    cart != null ? res.status(200).json(cart) : res.status(400).json({ msg: `No matching cart for user ${req.params.userId}` });
 });
 
 app.delete('/user/:userId/cart', async (req, res) => {
@@ -143,10 +205,10 @@ app.delete('/user/:userId/cart', async (req, res) => {
 //
 
 app.post('/user/:cartId/cartItem', async (req, res) => {
-    var cart;
+
     //create a joi object to validate the body request
     const schema = Joi.object({
-        storeItemId: Joi.string().min(10).required(),
+        storeItemId: Joi.string().min(5).required(),
         quantity: Joi.number().required(),
     });
 
@@ -158,36 +220,54 @@ app.post('/user/:cartId/cartItem', async (req, res) => {
         res.status(400).send(error);
         return;
     }
-
-    try {
-        const newCartItem = {
-            _id: new mongoose.Types.ObjectId(),
-            quantity: req.body.quantity,
-            cart: req.params.cartId,
-            items: [req.body.storeItemId]
+    var cart = await Cart.findById(req.params.cartId).populate('cartItems.item');
+    const cartItemAlreadyInCart = await cart.cartItems.find(cartItem => {
+        return cartItem.item._id.toString() == req.body.storeItemId;
+    });
+    if (cartItemAlreadyInCart) {
+        try {
+            cartItemAlreadyInCart.quantity += req.body.quantity;
+            cart = await cart.save();
+            res.status(200).send(cart)
+        } catch (e) {
+            res.status(400).json({ msg: `Could not create cartItem, ${e}` });
+            return;
         }
-        let cartItem = await CartItem(newCartItem).save();
-        console.log(`new cart item saved: ${cartItem._id}`);
-        await Cart.update({ _id: req.params.cartId }, { "$push": { "cartItems": cartItem._id}})
-    } catch (e) {
-        res.status(400).json({ msg: `Could not create cartItem, ${e}` });
-        return;
+    } else {
+        try {
+            var storeItem = await StoreItem.findById(req.body.storeItemId);
+            cart.cartItems.push({quantity: req.body.quantity, item: storeItem});
+            cart = await cart.save();
+            res.status(200).send(cart)
+        } catch (e) {
+            res.status(400).json({ msg: `Could not create cartItem, ${e}` });
+            return;
+        }
     }
-    cartItem != null ? res.status(200).json({ msg: `Successfully added item`}) : res.status(400).json({ msg: `Could not create cartitem` });
 });
 
 app.delete('/user/:cartId/cartItem/:cartItemId', async (req, res) => {
     var cartItem;
     var cart;
     try {
-        cartItem = await CartItem.findByIdAndDelete(req.params.cartItemId);
-        cart = await Cart.update({ _id: req.params.cartId }, { "$pull": { "cartItems": req.params.cartItemId } });
+        cart = await Cart.findById(req.params.cartId).populate('cartItems.item');
+        if (!cart){
+            return res.sendStatus(404);
+        }
+        const cartItem = cart.items.find(item => {
+            return item.id.toString() == req.params.cartItemId
+        });
+        if (!cartItem){
+            return res.sendStatus(404);
+        }
+        cart.items.pull(cartItem);
+        cart = await cart.save();
+        res.status(200).json(cart);
     } catch (e) {
         console.log(`error: ${e}`);
         res.status(400).json({ msg: `Could not find cart with the userId of ${req.params.cartId}  ${e}` });
         return;
     }
-    cartItem != null || cart != null ? res.status(200).json({ msg: `Deleted cartItem ${cartItem}` }) : res.status(400).json({ msg: `No matching cartItem for id ${req.params.cartItemId}` });
 });
 
 //

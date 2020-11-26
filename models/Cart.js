@@ -5,7 +5,10 @@ const CartSchema = new mongoose.Schema({
     name: String,
     user: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     cartItems: [
-        { type: mongoose.Schema.Types.ObjectId, ref: 'CartItem' },
+        {
+            quantity: Number,
+            item: { type: mongoose.Schema.Types.ObjectId, ref: 'StoreItem' },
+        }
     ],
 })
 
