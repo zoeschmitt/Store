@@ -1,3 +1,3 @@
-# Milestone 2
+# Milestone 3
 
-MongoDB integrated
+React UI
