@@ -21,8 +21,12 @@ const PORT = 8080;
 var database;
 
 (async () => {
-    database = await mongoose.connect(url);
-    database ? console.log('Successfully connected to db') : console.log('Error connecting to db');
+    try {
+        database = await mongoose.connect(url, { useNewUrlParser: true , useUnifiedTopology: true});
+        database ? console.log('Successfully connected to db\n') : console.log('Error connecting to db\n');
+    } catch (e) {
+        console.log(`Could not connect to db: ${e}`);
+    }
 })();
 
 
@@ -134,10 +138,10 @@ app.use(async (req, res, next) => {
             const user = jwt.verify(jwtToken, accessTokenSecret);
             req.userJwt = user;
         } else {
-            return res.send(401);
+            return res.sendStatus(401);
         }
     } catch (err) {
-        res.send(403);
+        res.sendStatus(403);
     }
     next();
 })
@@ -182,7 +186,6 @@ app.get('/user/:userId/cart', async (req, res) => {
     } catch (e) {
         console.log(`error: ${e}`);
         res.status(400).json({ msg: `Could not find cart with the userId of ${req.params.userId}  ${e}` });
-        return;
     }
 });
 
@@ -195,7 +198,6 @@ app.delete('/user/:userId/cart', async (req, res) => {
     } catch (e) {
         console.log(`error: ${e}`);
         res.status(400).json({ msg: `Could not find cart with the userId of ${req.params.userId}  ${e}` });
-        return;
     }
     cart != null ? res.status(200).json({ msg: `Deleted cart ${cart}` }) : res.status(400).json({ msg: `No matching cart for user ${req.params.userId}` });
 });
@@ -247,26 +249,27 @@ app.post('/user/:cartId/cartItem', async (req, res) => {
 });
 
 app.delete('/user/:cartId/cartItem/:cartItemId', async (req, res) => {
-    var cartItem;
     var cart;
     try {
         cart = await Cart.findById(req.params.cartId).populate('cartItems.item');
         if (!cart){
-            return res.sendStatus(404);
+            return res.sendStatus(404).json({'msg': 'Could not find item'});
         }
-        const cartItem = cart.items.find(item => {
-            return item.id.toString() == req.params.cartItemId
+        const cartItem = cart.cartItems.find(item => {
+            if (item._id.toString() === req.params.cartItemId) {
+                return item;
+            }
         });
         if (!cartItem){
-            return res.sendStatus(404);
+            return res.sendStatus(404).json({'msg': 'Could not find cart item'});
         }
-        cart.items.pull(cartItem);
+        cart.cartItems.pull(cartItem);
+        console.log(`cartItems`);
         cart = await cart.save();
         res.status(200).json(cart);
     } catch (e) {
         console.log(`error: ${e}`);
         res.status(400).json({ msg: `Could not find cart with the userId of ${req.params.cartId}  ${e}` });
-        return;
     }
 });
 
@@ -274,26 +277,20 @@ app.delete('/user/:cartId/cartItem/:cartItemId', async (req, res) => {
 //  Store Item API
 //
 
-app.get('/storeItem/:storeItemId', async (req, res, next) => {
+app.get('/StoreItemById/:storeItemId', async (req, res) => {
     var item;
     var sessionItems = req.session.viewedItems || [];
 
-    if (req.query) {
-        next();
-        return;
-    }
-
-    try {
-        item = await StoreItem.findById(req.params.storeItemId);
-        sessionItems.push(item._id)
-        req.session.viewedItems = sessionItems;
-    } catch (e) {
-        console.log(`error: ${e}`);
-        res.status(400).json({ msg: `Could not find item with id ${req.params.storeItemId}, ${e}` });
-        return;
-    }
-
-    item != null ? res.status(200).json(item) : res.status(400).json({ msg: `No item with the id of ${req.params.storeItemId}` });
+        try {
+            item = await StoreItem.findById(req.params.storeItemId);
+            sessionItems.push(item._id)
+            req.session.viewedItems = sessionItems;
+            res.status(200).json(item);
+        } catch (e) {
+            console.log(`error: ${e}`);
+            res.status(400).json({ msg: `Could not find item` });
+        }
+    
 });
 
 
@@ -322,19 +319,21 @@ app.get('/storeItem', async (req, res) => {
 app.get('/storeItem/recent', async (req, res) => {
     var items = req.session.viewedItems || [];
     var response = [];
-    
     try {
         if (req.query !== null) {
             for (var i = 0; i <= req.query.num || i <= items.length; i++) {
-                response.push(await StoreItem.findById(items[i]));
+                if (items[i] !== undefined) {
+                    const item = await StoreItem.findById(items[i]);
+                    response.push(item);
+                }
             }
         }
+        response.length > 0 ? res.status(200).json(response) : res.status(201).json({msg: 'no recent items'});
     } catch (e) {
         console.log(`error: ${e}`);
         res.status(400).json({ msg: `Could not get items  ${e}` });
         return;
     }
-    res.json(response);
 });
 
 // make the server listen to requests
