@@ -1,175 +1,216 @@
 /*
 Store API by Zoe Schmitt (zms29)
-
-Note: 
-- As of now users only have one cart but have an array for the cartIds to allow for having multiple carts
-in the future. (maybe a wish list, so in that case will add a new endpoint /wishlist).
 */
 
 const express = require('express');
+const jwt = require('jsonwebtoken');
+const accessTokenSecret = "someSecretIJustInvented!";
+var cors = require('cors');
 const Joi = require('joi');
-const { v4: uuidv4 } = require('uuid');
-
+const url = 'mongodb+srv://dbUser:dbUserPassword@cluster0.uune5.mongodb.net/store_db?retryWrites=true&w=majority';
+const mongoose = require('mongoose');
+const session = require('express-session')
+const MongoStore = require('connect-mongo')(session);
+const User = require('./models/User')
+const Cart = require('./models/Cart')
+const StoreItem = require('./models/StoreItem');
+const { boolean } = require('joi');
 const app = express();
-
 const PORT = 8080;
 
-//
-//  Dummy Data
-//
-const users = [
-    {
-        id: '2027228e-d39d-4e89-8b2e-0eb8010536a4',
-        firstName: 'Zoe',
-        lastName: 'Schmitt',
-        email: 'zoeschmitt@hotmail.com',
-        cartIds: [
-            '7fd36769-4f7a-4845-9e47-893c70988ece',
-        ]
-    }
-];
+var database;
 
-const carts = [
-    {
-        userId: '027228e-d39d-4e89-8b2e-0eb8010536a4',
-        cartId: '7fd36769-4f7a-4845-9e47-893c70988ece',
-        cartName: 'main',
-        cartItems: [
-            {
-                cartItemId: '31cb258d-d33b-4e9e-b0d6-e94982988186',
-                quantity: 1,
-                storeItemId: '9d9d5fd7-9b11-4a1d-9ba2-437ba68f220e'
-            },
-            {
-                cartItemId: '09973742-5f60-4be2-8e83-0f19849851d9',
-                quantity: 3,
-                storeItemId: '1b7bc830-dde5-4f0e-93f8-a4d593e09616'
-            },
-        ]
+(async () => {
+    try {
+        database = await mongoose.connect(url, { useNewUrlParser: true , useUnifiedTopology: true});
+        database ? console.log('Successfully connected to db\n') : console.log('Error connecting to db\n');
+    } catch (e) {
+        console.log(`Could not connect to db: ${e}`);
     }
-];
+})();
 
-const storeItems = [
-    { id: '9d9d5fd7-9b11-4a1d-9ba2-437ba68f220e', name: 'Cessna 172' },
-    { id: '1b7bc830-dde5-4f0e-93f8-a4d593e09616', name: 'Cessna 150' },
-    { id: 'dcf47a00-dd23-41f6-8965-81601216734d', name: 'Beechcraft Bonanza' },
-    { id: 'f8747408-abc8-4fbc-968f-d09a3314feb1', name: 'Mooney M20' },
-];
 
 //
 //  Middleware
 //
-
+app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
+app.use(session({
+    secret: 'secret-key',
+    resave: false,
+    saveUninitialized: true,
+    store: new MongoStore({mongooseConnection: database ? database : mongoose.connection}),
+}));
 
 //
 //  User API
 //
 
-app.get('/user/:userId', (req, res) => {
-    const user = users.find(u => u.id === req.params.userId);
+app.post('/user/signin', async (req, res) => {
+    var user;
+    //create a joi object to validate the body request
+    const schema = Joi.object({
+        email: Joi.string().email().required(),
+        password: Joi.string().min(2).required(),
+    });
 
-    if (user) {
-        res.json(user);
-    } else {
-        res.status(400).json({ msg: `No user with the id of ${req.params.userId}` });
+    //use new joi object to validate
+    const { error, value } = schema.validate({ email: req.body.email, password: req.body.password });
+
+    if (error) {
+        console.log(`eror: ${error}`);
+        res.status(400).send(error);
+        return;
     }
-});
 
-app.post('/user', (req, res) => {
+    try {
+        const {email, password} = req.body;
+        const user = await User.findOne({email, password}).populate('carts');
+        if (user) {
+            //User was found, create a token!
+            const accessToken = jwt.sign({user}, accessTokenSecret);
+            res.status(200).json({jwt: accessToken, userId: user._id, firstName: user.firstName, lastName: user.lastName, carts: user.carts});
+        } else {
+            res.sendStatus(403);
+        }
+    } catch(e){
+        return res.status(400).send(e)
+    }
+})
 
+//create a new user
+app.post('/user', async (req, res) => {
+    var user;
     //create a joi object to validate the body request
     const schema = Joi.object({
         firstName: Joi.string().min(2).required(),
         lastName: Joi.string().min(2).required(),
         email: Joi.string().email().required(),
+        password: Joi.string().min(2).required()
     });
 
     //use new joi object to validate
-    const { error, value } = schema.validate({ firstName: req.body.firstName, lastName: req.body.lastName, email: req.body.email });
+    const { error, value } = schema.validate({ firstName: req.body.firstName, lastName: req.body.lastName, email: req.body.email, password: req.body.password });
 
     if (error) {
-        console.log(error);
+        console.log(`eror: ${error}`);
         res.status(400).send(error);
         return;
     }
 
-    //initializing new cart and user unique id
-    let newCartId = uuidv4();
-    let newUserId = uuidv4();
+    try {
+        const newUser = {
+            _id: new mongoose.Types.ObjectId(),
+            firstName: req.body.firstName,
+            lastName: req.body.lastName,
+            email: req.body.email,
+            password: req.body.password,
+            carts: []
+        }
 
-    const newUser = {
-        id: newUserId,
-        firstName: req.body.firstName,
-        lastName: req.body.lastName,
-        email: req.body.email,
-        cartIds: [
-            newCartId,
-        ]
-    };
+        const newCart = {
+            _id: new mongoose.Types.ObjectId(),
+            name: "main",
+            user: newUser._id,
+            items: []
+        }
+        newUser.carts.push(newCart._id);
+        user = await User(newUser).save();
+        console.log(`new user saved: ${newUser._id}`);
+        await Cart(newCart).save();
+        console.log(`new cart saved: ${newCart._id}`);
+        const accessToken = jwt.sign({user}, accessTokenSecret);
+        console.log(`jwt token created`);
+        res.status(200).json({jwt: accessToken, userId: user._id, firstName: user.firstName, lastName: user.lastName, carts: user.carts});
+    } catch (e) {
+        res.status(400).json({ msg: `Could not create user, ${e}` });
+        return;
+    }
+});
 
-    const newCart = {
-        userId: newUserId,
-        cartId: newCartId,
-        cartName: 'main',
-        cartItems: []
+app.use(async (req, res, next) => {
+    try {
+        const authHeader = req.headers.authorization;
+        if (authHeader) {
+            //Bearer eyJhbGci...
+            const jwtToken = authHeader.split(' ')[1];
+            const user = jwt.verify(jwtToken, accessTokenSecret);
+            req.userJwt = user;
+        } else {
+            return res.sendStatus(401);
+        }
+    } catch (err) {
+        res.sendStatus(403);
+    }
+    next();
+})
+
+app.get('/user/:userId', async (req, res) => {
+    var user;
+    try {
+        await User.findById(req.params.userId, function (err, foundUser) {
+            if (err) {
+                res.status(400).json({ msg: `Could not find user with id of ${req.params.userId}` });
+                return;
+            } else {
+                console.log(`found user: ${foundUser}`);
+                user = foundUser;
+            }
+        });
+        if (req.userJwt.user._id !== user.id) {
+            return res.sendStatus(403);
+        }
+    } catch (e) {
+        console.log(`error: ${e}`);
+        res.status(400).json({ msg: `Could not find user with the id of ${req.params.userId}  ${e}` });
+        return;
     }
 
-    users.push(newUser);
-    carts.push(newCart);
-
-    res.status(200).json(users);
+    user != null ? res.status(200).json(user) : res.status(400).json({ msg: `No user with the id of ${req.params.userId}` });
 });
 
 //
 //  Cart API
 //
 
-app.get('/user/:userId/cart', (req, res) => {
-    const user = users.find(u => u.id === req.params.userId);
-
-    if (user.cartIds.length > 0) {
-        const cart = carts.find(c => c.cartId === user.cartIds[0]);
-        res.status(200).json(cart);
-    } else {
-        res.status(400).json({ msg: `No matching cart for user ${req.params.userId}` });
+app.get('/user/:userId/cart', async (req, res) => {
+    var cart;
+    try {
+        cart = await Cart.findOne({ user: req.params.userId }).populate('cartItems.item');
+        //console.log(`cart: ${cart}`);
+        if (req.userJwt.user._id !== req.params.userId) {
+            return res.send(403);
+        }
+        res.status(200).json(cart)
+    } catch (e) {
+        console.log(`error: ${e}`);
+        res.status(400).json({ msg: `Could not find cart with the userId of ${req.params.userId}  ${e}` });
     }
 });
 
-app.delete('/user/:userId/cart', (req, res) => {
-    let len = carts.length;
-    let len2 = users.length;
-    var found = false;
-
-    for (j = 0; j < len2; j++) {
-        if (users[j].id === req.params.userId) {
-            if (users[j].cartIds.length > 0) {
-                for (i = 0; i < len; i++) {
-                    if (carts[i].cartId === users[j].cartIds[0]) {
-                        found = true;
-                        carts[i].cartItems.splice(0, carts[i].cartItems.length);
-                    }
-                }
-            } else {
-                res.status(400).json({ msg: `User ${req.params.userId} has no carts` });
-            }
-        }
+app.delete('/user/:userId/cart', async (req, res) => {
+    var cart;
+    //var user;
+    try {
+        cart = await Cart.findOneAndDelete({ user: req.params.userId });
+        //cart = await User.update({ _id: req.params.userId }, { "$pop": { "carts": -1} });
+    } catch (e) {
+        console.log(`error: ${e}`);
+        res.status(400).json({ msg: `Could not find cart with the userId of ${req.params.userId}  ${e}` });
     }
-
-    found ? res.status(200).json({ msg: `Success deleting cart` }) : res.status(400).json({ msg: `Could not find cart` });
-
+    cart != null ? res.status(200).json({ msg: `Deleted cart ${cart}` }) : res.status(400).json({ msg: `No matching cart for user ${req.params.userId}` });
 });
 
 //
 //  Cart Item API
 //
 
-app.post('/user/:cartId/cartItem', (req, res) => {
-    var cartIndex;
+app.post('/user/:cartId/cartItem', async (req, res) => {
+
     //create a joi object to validate the body request
     const schema = Joi.object({
-        storeItemId: Joi.string().min(10).required(),
+        storeItemId: Joi.string().min(5).required(),
         quantity: Joi.number().required(),
     });
 
@@ -181,71 +222,118 @@ app.post('/user/:cartId/cartItem', (req, res) => {
         res.status(400).send(error);
         return;
     }
-
-    const cartItem = {
-        cartItemId: uuidv4(),
-        quantity: req.body.quantity,
-        storeItemId: req.body.storeItemId,
-    };
-
-    for (i = 0; i < carts.length; i++) {
-        if (carts[i].cartId === req.params.cartId) {
-            cartIndex = i;
-            carts[i].cartItems.push(cartItem);
+    var cart = await Cart.findById(req.params.cartId).populate('cartItems.item');
+    const cartItemAlreadyInCart = await cart.cartItems.find(cartItem => {
+        return cartItem.item._id.toString() == req.body.storeItemId;
+    });
+    if (cartItemAlreadyInCart) {
+        try {
+            cartItemAlreadyInCart.quantity += req.body.quantity;
+            cart = await cart.save();
+            res.status(200).send(cart)
+        } catch (e) {
+            res.status(400).json({ msg: `Could not create cartItem, ${e}` });
+            return;
+        }
+    } else {
+        try {
+            var storeItem = await StoreItem.findById(req.body.storeItemId);
+            cart.cartItems.push({quantity: req.body.quantity, item: storeItem});
+            cart = await cart.save();
+            res.status(200).send(cart)
+        } catch (e) {
+            res.status(400).json({ msg: `Could not create cartItem, ${e}` });
+            return;
         }
     }
-
-    cartIndex !== null ? res.status(200).json(carts[cartIndex]) : res.status(400).json({ msg: `Could not add item` });
-
 });
 
-app.delete('/user/:cartId/cartItem/:cartItemId', (req, res) => {
-    var found = false;
-
-    for (j = 0; j < carts.length; j++) {
-        if (carts[j].cartId === req.params.cartId) {
-            for (i = 0; i < carts[j].cartItems.length; i++) {
-                if (carts[j].cartItems[i].cartItemId === req.params.cartItemId) {
-                    found = true;
-                    carts[j].cartItems.splice(i, 1);
-                }
-            }
+app.delete('/user/:cartId/cartItem/:cartItemId', async (req, res) => {
+    var cart;
+    try {
+        cart = await Cart.findById(req.params.cartId).populate('cartItems.item');
+        if (!cart){
+            return res.sendStatus(404).json({'msg': 'Could not find item'});
         }
+        const cartItem = cart.cartItems.find(item => {
+            if (item._id.toString() === req.params.cartItemId) {
+                return item;
+            }
+        });
+        if (!cartItem){
+            return res.sendStatus(404).json({'msg': 'Could not find cart item'});
+        }
+        cart.cartItems.pull(cartItem);
+        console.log(`cartItems`);
+        cart = await cart.save();
+        res.status(200).json(cart);
+    } catch (e) {
+        console.log(`error: ${e}`);
+        res.status(400).json({ msg: `Could not find cart with the userId of ${req.params.cartId}  ${e}` });
     }
-
-    found ? res.status(200).json({ msg: `Success deleting item` }) : res.status(400).json({ msg: `Could not delete item` });
-
 });
 
 //
 //  Store Item API
 //
 
-app.get('/storeItem/:storeItemId', (req, res) => {
-    const item = storeItems.find(i => i.id === req.params.storeItemId);
+app.get('/StoreItemById/:storeItemId', async (req, res) => {
+    var item;
+    var sessionItems = req.session.viewedItems || [];
 
-    if (item) {
-        res.status(200).json(item);
-    } else {
-        res.status(400).json({ msg: `No matching item for id ${req.params.storeItemId}` });
-    }
+        try {
+            item = await StoreItem.findById(req.params.storeItemId);
+            sessionItems.push(item._id)
+            req.session.viewedItems = sessionItems;
+            res.status(200).json(item);
+        } catch (e) {
+            console.log(`error: ${e}`);
+            res.status(400).json({ msg: `Could not find item` });
+        }
+    
 });
 
-app.get('/storeItem', (req, res) => {
+
+app.get('/storeItem', async (req, res) => {
+    var items = [];
     var response = [];
 
-    if (req.query !== null) {
-        for (i = 0; i < storeItems.length; i++) {
-            var regex = new RegExp(req.query.query, 'gi');
-            if (regex.test(storeItems[i].name)) {
-                response.push(storeItems[i]);
+    try {
+        if (req.query !== null) {
+            items = await StoreItem.find({});
+            for (i = 0; i < items.length; i++) {
+                var regex = new RegExp(req.query.query, 'gi');
+                if (regex.test(items[i].name)) {
+                    response.push(items[i]);
+                }
             }
         }
-    } else {
-        res.status(400).json({ msg: `Error with query` });
+    } catch (e) {
+        console.log(`error: ${e}`);
+        res.status(400).json({ msg: `Could not execute search  ${e}` });
+        return;
     }
-
     res.json(response);
+});
+
+app.get('/storeItem/recent', async (req, res) => {
+    var items = req.session.viewedItems || [];
+    var response = [];
+    try {
+        if (req.query !== null) {
+            for (var i = 0; i <= req.query.num || i <= items.length; i++) {
+                if (items[i] !== undefined) {
+                    const item = await StoreItem.findById(items[i]);
+                    response.push(item);
+                }
+            }
+        }
+        response.length > 0 ? res.status(200).json(response) : res.status(201).json({msg: 'no recent items'});
+    } catch (e) {
+        console.log(`error: ${e}`);
+        res.status(400).json({ msg: `Could not get items  ${e}` });
+        return;
+    }
 });
 
 // make the server listen to requests
